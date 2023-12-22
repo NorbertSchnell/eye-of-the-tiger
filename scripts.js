@@ -245,5 +245,6 @@ function onDeviceMotion(e) {
     }
   }
 
+  lastFilteredRot = currentFilteredRot;
   lastDiffRot = currentDiffRot;
 }
