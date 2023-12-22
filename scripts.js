@@ -211,7 +211,7 @@ function listenToDeviceMotion() {
   window.addEventListener("devicemotion", onDeviceMotion);
 }
 
-const rotationRateThreshold = 10;
+const rotationRateThreshold = 50;
 let filterCoeff = null;
 let lastFilteredRot = 0;
 let lastDiffRot = null;
