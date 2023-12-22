@@ -220,7 +220,7 @@ function onDeviceMotion(e) {
   }
 
   const rotationRate = e.rotationRate;
-  const rotationRateMagnitude = Math.sqrt(rotationRate.x * rotationRate.x + rotationRate.y * rotationRate.y + rotationRate.z * rotationRate.z);
+  const rotationRateMagnitude = Math.sqrt(rotationRate.alpha * rotationRate.alpha + rotationRate.beta * rotationRate.beta + rotationRate.gamma * rotationRate.gamma);
 
   if (rotationRateMagnitude >= rotationRateThreshold) {
     playNextHit();
