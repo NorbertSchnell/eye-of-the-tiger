@@ -222,15 +222,15 @@ function onDeviceMotion(e) {
     clearTimeout(dataStreamTimeout);
   }
 
-  const rotationRate = e.rotationRate;
-  const rotMag = Math.sqrt(rotationRate.alpha * rotationRate.alpha + rotationRate.beta * rotationRate.beta + rotationRate.gamma * rotationRate.gamma);
-  const currentFilteredRot = filterCoeff * lastFilteredRot + (1 - filterCoeff) * rotMag;
-  const lastDiffRot = currentFilteredRot - lastFilteredRot;
-
   // init filterCoeff with sensor interval
   if (filterCoeff === null) {
     filterCoeff = Math.exp(-2.0 * Math.PI * e.interval / 1);
   }
+
+  const rotationRate = e.rotationRate;
+  const rotMag = Math.sqrt(rotationRate.alpha * rotationRate.alpha + rotationRate.beta * rotationRate.beta + rotationRate.gamma * rotationRate.gamma);
+  const currentFilteredRot = filterCoeff * lastFilteredRot + (1 - filterCoeff) * rotMag;
+  const currentDiffRot = currentFilteredRot - lastFilteredRot;
 
   // init lastDiffRot
   if (lastDiffRot === null) {
@@ -244,4 +244,6 @@ function onDeviceMotion(e) {
       playNextHit();
     }
   }
+
+  lastDiffRot = currentDiffRot;
 }
