@@ -212,6 +212,9 @@ function listenToDeviceMotion() {
 }
 
 const rotationRateThreshold = 10;
+let filterCoeff = null;
+let lastFilteredRot = 0;
+let lastDiffRot = null;
 
 function onDeviceMotion(e) {
   if (dataStreamTimeout !== null && dataStreamResolve !== null) {
@@ -220,9 +223,25 @@ function onDeviceMotion(e) {
   }
 
   const rotationRate = e.rotationRate;
-  const rotationRateMagnitude = Math.sqrt(rotationRate.alpha * rotationRate.alpha + rotationRate.beta * rotationRate.beta + rotationRate.gamma * rotationRate.gamma);
+  const rotMag = Math.sqrt(rotationRate.alpha * rotationRate.alpha + rotationRate.beta * rotationRate.beta + rotationRate.gamma * rotationRate.gamma);
+  const currentFilteredRot = filterCoeff * lastFilteredRot + (1 - filterCoeff) * rotMag;
+  const lastDiffRot = currentFilteredRot - lastFilteredRot;
 
-  if (rotationRateMagnitude >= rotationRateThreshold) {
-    playNextHit();
+  // init filterCoeff with sensor interval
+  if (filterCoeff === null) {
+    filterCoeff = Math.exp(-2.0 * Math.PI * e.interval / 1);
+  }
+
+  // init lastDiffRot
+  if (lastDiffRot === null) {
+    lastDiffRot = currentDiffRot;
+  }
+
+  if (lastDiffRot >= 0 && currentDiffRot < 0) {
+    const peakRot = currentFilteredRot;
+
+    if (peakRot >= rotationRateThreshold) {
+      playNextHit();
+    }
   }
 }
