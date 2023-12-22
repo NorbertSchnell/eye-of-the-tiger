@@ -215,6 +215,7 @@ const rotationRateThreshold = 240;
 let filterCoeff = null;
 let lastFilteredRot = 0;
 let lastDiffRot = null;
+let lastHitTime = -Infinity;
 
 function onDeviceMotion(e) {
   if (dataStreamTimeout !== null && dataStreamResolve !== null) {
@@ -224,7 +225,7 @@ function onDeviceMotion(e) {
 
   // init filterCoeff with sensor interval
   if (filterCoeff === null) {
-    filterCoeff = Math.exp(-2.0 * Math.PI * e.interval / 1);
+    filterCoeff = Math.exp(-2.0 * Math.PI * e.interval / 2);
   }
 
   const rotationRate = e.rotationRate;
@@ -238,10 +239,12 @@ function onDeviceMotion(e) {
   }
 
   if (lastDiffRot >= 0 && currentDiffRot < 0) {
+    const peakTime = 1000 * performance.now();
     const peakRot = currentFilteredRot;
 
-    if (peakRot >= rotationRateThreshold) {
+    if (peakRot >= rotationRateThreshold && (peakTime - lastHitTime) > 0.1) {
       playNextHit();
+      lastHitTime = peakTime;
     }
   }
 
