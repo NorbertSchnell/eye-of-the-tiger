@@ -239,7 +239,7 @@ function onDeviceMotion(e) {
   }
 
   if (lastDiffRot >= 0 && currentDiffRot < 0) {
-    const peakTime = 1000 * performance.now();
+    const peakTime = 0.001 * performance.now();
     const peakRot = currentFilteredRot;
 
     if (peakRot >= rotationRateThreshold && (peakTime - lastHitTime) > 0.25) {
