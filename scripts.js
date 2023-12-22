@@ -219,7 +219,7 @@ function onDeviceMotion(e) {
     clearTimeout(dataStreamTimeout);
   }
 
-  const rotationRate = e.rotationrate;
+  const rotationRate = e.rotationRate;
   const rotationRateMagnitude = Math.sqrt(rotationRate.x * rotationRate.x + rotationRate.y * rotationRate.y + rotationRate.z * rotationRate.z);
 
   if (rotationRateMagnitude >= rotationRateThreshold) {
