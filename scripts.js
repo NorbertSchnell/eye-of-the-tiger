@@ -1,11 +1,11 @@
 const audioFiles = [
-  'eot-guitar-loop.wav',
-  'eot-piano-reverse.wav',
-  'eot-drum-loop.wav', // level 0
-  'eot-guitar-melody-loop.wav', // level 1
-  'eot-voice-loop.wav', // level 2
-  'eot-guitar-crunch-loop.wav', // level 3
-  'eot-tail.wav',
+  'eot-guitar-loop.wav', // layer 0 (rhythm guitar riff)
+  'eot-piano-reverse.wav', // inverse piano sample
+  'eot-drum-loop.wav', // 1st layer (drum loop)
+  'eot-guitar-melody-loop.wav', // 2nd layer (melodic guitar )
+  'eot-voice-loop.wav', // 3rd layer (voice)
+  'eot-guitar-crunch-loop.wav', // 4th layer(heavy guitar)
+  'eot-tail.wav', // final hit and vocals
   'eot-hit-01.wav',
   'eot-hit-02.wav',
   'eot-hit-03.wav',
@@ -31,18 +31,27 @@ const hitMarkers = [
   6.311438
 ];
 
-const numLevels = 4;
-const pointsPerLevel = 20;
-const maxPoints = (numLevels + 1) * pointsPerLevel;
-const levelOffset = 2;
-const hitOffset = numLevels + 3;
-const badDuration = 0.05;
+const layerLabels = [
+  'Intro',
+  'Drums',
+  'Lead Guitar',
+  'Vocals',
+  'Heavy Guitar',
+  'End',
+];
+
+const numHits = hitMarkers.length;
+const numLayers = 4;
+const pointsPerLayer = 2 * numHits;
+const allPoints = (numLayers + 1) * pointsPerLayer;
+const layerOffset = 2;
+const hitOffset = numLayers + 3;
+const badDuration = 0.050;
+const fadeOutDuration = 0.050;
 let startTime = 0;
+let layerIndex = 0;
 let hitIndex = 0;
 let points = 0;
-let level = 0;
-
-const loops = new Set();
 
 /********************************************************************
  * 
@@ -64,8 +73,8 @@ startScreenDiv.addEventListener("click", () => {
   const deviceMotionPromise = requestDeviceMotion();
 
   Promise.all([audioPromise, deviceMotionPromise, buffersReady])
-    .then(() => start()) // close start screen (everything is ok)
-    .catch((error) => setOverlayError(error)); // display error
+    .then(() => start()) // start application
+    .catch((error) => setOverlayError(error)); // ... or display error
 });
 
 function start() {
@@ -74,6 +83,9 @@ function start() {
   startTime = audioContext.currentTime;
   playSound(0, 0, 0, true);
   playSound(1, 0, 0, false);
+
+  displayPoints(0);
+  displayLayer(0);
 
   listenToSpaceBar();
 
@@ -113,6 +125,7 @@ function setOverlayError(text) {
  */
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioContext = new AudioContext();
+const loops = new Set();
 const audioBuffers = [];
 let numBuffersReady = 0;
 
@@ -153,7 +166,6 @@ function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
   const time = audioContext.currentTime;
   const amp = decibelToLinar(amplify);
   const buffer = audioBuffers[index];
-  const fadeOutDuration = 0.050;
 
   const gain = audioContext.createGain();
   gain.connect(audioContext.destination);
@@ -164,7 +176,7 @@ function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
   source.buffer = buffer;;
   source.loop = loop;
   source.start(time, offset);
- 
+
   if (duration > 0 && duration < (buffer.duration - fadeOutDuration)) {
     gain.gain.setValueAtTime(amp, time + duration);
     gain.gain.linearRampToValueAtTime(0, time + duration + fadeOutDuration);
@@ -176,6 +188,20 @@ function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
   }
 }
 
+function stopAllLoops() {
+  const time = audioContext.currentTime;
+
+  for (let loop of loops) {
+    const source = loop.source;
+    const gain = loop.gain;
+    gain.gain.setValueAtTime(loop.amp, time);
+    gain.gain.linearRampToValueAtTime(0, time + fadeOutDuration);
+    source.stop(time + fadeOutDuration);
+  }
+}
+
+
+
 function decibelToLinar(val) {
   return Math.exp(0.11512925464970229 * val); // pow(10, val / 20)
 }
@@ -186,7 +212,7 @@ function decibelToLinar(val) {
 function listenToSpaceBar() {
   document.addEventListener('keyup', event => {
     if (event.code === 'Space') {
-      doHit();
+      playHit();
     }
   })
 }
@@ -245,8 +271,7 @@ let filterCoeff = null;
 let lastFilteredRot = 0;
 let lastDiffRot = null;
 let lastHitTime = -Infinity;
-
-let markerIndex = -1;
+let reachedEnd = false;
 
 function onDeviceMotion(e) {
   if (dataStreamTimeout !== null && dataStreamResolve !== null) {
@@ -275,7 +300,7 @@ function onDeviceMotion(e) {
 
     const timeSinceLastHit = peakTime - lastHitTime;
     if (peakRot >= rotationRateThreshold && timeSinceLastHit > 0.25) {
-      doHit();
+      playHit();
       lastHitTime = peakTime;
     }
   }
@@ -284,42 +309,57 @@ function onDeviceMotion(e) {
   lastDiffRot = currentDiffRot;
 }
 
-function doHit() {
-  const time = audioContext.currentTime;
-  const loopDuration = audioBuffers[0].duration;
-  const loopTime = (time - startTime) % loopDuration;
+/********************************************************************
+ *  hits, points and layers
+ */
+function playHit() {
+  if (!reachedEnd) {
+    const time = audioContext.currentTime;
+    const loopDuration = audioBuffers[0].duration;
+    const loopTime = (time - startTime) % loopDuration;
+    const tolerance = loopDuration / 64;
 
-  const tolerance = audioBuffers[0].duration / 64;
-  const tolerantLoopTime = (loopTime + tolerance) % loopDuration;
-  hitIndex = getCurrentOrPreviousIndex(hitMarkers, tolerantLoopTime, hitIndex);
+    // get hit corresponding to current loop time with tolerance
+    const tolerantLoopTime = (loopTime + tolerance) % loopDuration;
+    hitIndex = getCurrentOrPreviousIndex(hitMarkers, tolerantLoopTime, hitIndex);
 
-  const diff = (hitMarkers[hitIndex] + tolerance - tolerantLoopTime);
-  const good = (diff > -tolerance && diff < tolerance);
-  const duration = good ? 0 : badDuration;
-  playSound(hitIndex + hitOffset, 6, duration);
+    // calculate difference time to current or next hit and compare with tolerance
+    const hitTime = hitMarkers[hitIndex];
+    const diff = Math.abs(hitTime - (tolerantLoopTime - tolerance));
+    const sucess = (diff < tolerance);
 
-  points += good ? 1 : -1;
-  displayPoints(points);
+    // play hit (shortend when too far from current or next hitTime)
+    const duration = sucess ? 0 : badDuration;
+    playSound(hitIndex + hitOffset, 6, duration);
 
-  if (hitIndex === 0 && points > pointsPerLevel * (level + 1) && level < numLevels) {
-    playSound(levelOffset + level, 0, 0, true, loopTime);
-    level++;
-  } else if (level == 2 && hitIndex === 9 && points > pointsPerLevel * (level + 1) - 1 && level < numLevels) {
-    playSound(levelOffset + level, 0, 0, true, loopTime);
-    level++;
-  } else if (level == numLevels && hitIndex === 0 && points >= maxPoints) {
-    playSound(levelOffset + numLevels, 0, 0, false, loopTime);
+    // increase/decrease points
+    points += sucess ? 1 : -1;
+    displayPoints(points, sucess);
 
-    const fadeOutDuration = 0.050;
+    // calculate points required for next layer
+    let nextLayerPoints = pointsPerLayer * (layerIndex + 1);
 
-    // kill all loops
-    for (let loop of loops) {
-      const source = loop.source;
-      const gain = loop.gain;
-      gain.gain.setValueAtTime(loop.amp, time);
-      gain.gain.linearRampToValueAtTime(0, time + fadeOutDuration);
-      source.stop(time + fadeOutDuration);
+    // launch layers loops (every 2 patterns = 20 hits)
+    if (hitIndex === 0 && points > nextLayerPoints && layerIndex < numLayers) {
+      // launch new layer on 1st hit (when enough points)
+      playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
+      layerIndex++;
+    } else if (layerIndex == 2 && hitIndex === 9 && points > nextLayerPoints - 1 && layerIndex < numLayers) {
+      // exception: voice loop (3rd layer) starts on last bar (10th hit)
+      playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
+      layerIndex++;
+    } else if (layerIndex == numLayers && hitIndex === 0 && points > allPoints) {
+      // play tail (final sample)
+      playSound(layerOffset + numLayers, 0, 0, false, loopTime);
+      stopAllLoops();
+      reachedEnd = true;
+      layerIndex++;
     }
+
+    // display layer (blinking when next layer is pending)
+    nextLayerPoints = pointsPerLayer * (layerIndex + 1);
+    const nextLayerPending = (points >= nextLayerPoints);
+    displayLayer(layerIndex, nextLayerPending);
   }
 }
 
@@ -350,7 +390,25 @@ function getCurrentOrPreviousIndex(sortedArray, value, index = -1) {
 }
 
 const pointsDiv = document.getElementById("points");
+const layerDiv = document.getElementById("layer");
 
-function displayPoints(points) {
+function displayPoints(points, success = true) {
   pointsDiv.innerHTML = points;
+
+  if (!success) {
+    pointsDiv.classList.add('error');
+  } else {
+    pointsDiv.classList.remove('error');
+  }
+}
+
+function displayLayer(layerIndex, pending = false) {
+  const label = layerLabels[layerIndex];
+  layerDiv.innerHTML = label;
+
+  if (pending) {
+    layerDiv.classList.add('pending');
+  } else {
+    layerDiv.classList.remove('pending');
+  }
 }
