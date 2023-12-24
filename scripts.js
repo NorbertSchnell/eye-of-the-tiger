@@ -40,18 +40,22 @@ const layerLabels = [
   'End',
 ];
 
-const numHits = hitMarkers.length;
 const numLayers = 4;
-const pointsPerLayer = 2 * numHits;
+const hitsPerLoop = hitMarkers.length;
+const loopsPerLayer = 2;
+const pointsPerLayer = loopsPerLayer * hitsPerLoop;
 const allPoints = (numLayers + 1) * pointsPerLayer;
 const layerOffset = 2;
 const hitOffset = numLayers + 3;
 const badDuration = 0.050;
 const fadeOutDuration = 0.050;
-let startTime = 0;
+let startTime = null;
+let layerStartTime = null;
 let layerIndex = 0;
 let hitIndex = 0;
 let points = 0;
+let layerPoints = 0;
+let extraPoints = 0;
 
 /********************************************************************
  * 
@@ -326,40 +330,72 @@ function playHit() {
     // calculate difference time to current or next hit and compare with tolerance
     const hitTime = hitMarkers[hitIndex];
     const diff = Math.abs(hitTime - (tolerantLoopTime - tolerance));
-    const sucess = (diff < tolerance);
+    const success = (diff < tolerance);
 
     // play hit (shortend when too far from current or next hitTime)
-    const duration = sucess ? 0 : badDuration;
+    const duration = success ? 0 : badDuration;
     playSound(hitIndex + hitOffset, 6, duration);
-
-    // increase/decrease points
-    points += sucess ? 1 : -1;
-    displayPoints(points, sucess);
 
     // calculate points required for next layer
     let nextLayerPoints = pointsPerLayer * (layerIndex + 1);
+    let nextLayer = false;
 
-    // launch layers loops (every 2 patterns = 20 hits)
-    if (hitIndex === 0 && points > nextLayerPoints && layerIndex < numLayers) {
-      // launch new layer on 1st hit (when enough points)
-      playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
-      layerIndex++;
-    } else if (layerIndex == 2 && hitIndex === 9 && points > nextLayerPoints - 1 && layerIndex < numLayers) {
-      // exception: voice loop (3rd layer) starts on last bar (10th hit)
-      playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
-      layerIndex++;
-    } else if (layerIndex == numLayers && hitIndex === 0 && points > allPoints) {
-      // play tail (final sample)
-      playSound(layerOffset + numLayers, 0, 0, false, loopTime);
-      stopAllLoops();
-      reachedEnd = true;
-      layerIndex++;
+    if (success) {
+      // increase points
+      points++;
+
+      if (hitIndex === 0 && layerStartTime === null) {
+        layerStartTime = time;
+      }
+
+      // launch layers loops (every 2 patterns = 20 hits)
+      if (layerIndex < numLayers && hitIndex === 0 && points > nextLayerPoints) {
+        // launch new layer on 1st hit (when enough points)
+        if (layerIndex !== 2) {
+          playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
+        }
+        nextLayer = true;
+      } else if (layerIndex == 2 && hitIndex === 9 && points > nextLayerPoints - 1) {
+        // exception: voice loop (3rd layer) starts on last bar (10th hit)
+        playSound(layerOffset + 2, 0, 0, true, loopTime);
+      } else if (layerIndex == numLayers && hitIndex === 0 && points > allPoints) {
+        // play tail (final sample)
+        playSound(layerOffset + numLayers, 0, 0, false, loopTime);
+        stopAllLoops();
+        nextLayer = true;
+        reachedEnd = true;
+      }
+
+      // enter next layer
+      if (nextLayer) {
+        const layerDuration = time - layerStartTime;
+        const expectedLayerDuration = loopsPerLayer * loopDuration;
+        const layerDiffDuration = Math.abs(layerDuration - expectedLayerDuration);
+        const maxDiffDuration = (loopDuration - hitMarkers[9] + 2 * tolerance);
+
+        // increase extra points for perfect layer
+        if (layerPoints === pointsPerLayer && layerDiffDuration < maxDiffDuration) {
+          extraPoints += 100;
+        }
+
+        layerIndex++; // increase layer
+        layerPoints = 0; // reset layer points
+        layerStartTime = time; // reset start time
+      }
+
+      // display layer (blinking when next layer is pending)
+      nextLayerPoints = pointsPerLayer * (layerIndex + 1);
+      const nextLayerPending = (points >= nextLayerPoints);
+      displayLayer(layerIndex, nextLayerPending);
+    } else {
+      points--;
     }
 
-    // display layer (blinking when next layer is pending)
-    nextLayerPoints = pointsPerLayer * (layerIndex + 1);
-    const nextLayerPending = (points >= nextLayerPoints);
-    displayLayer(layerIndex, nextLayerPending);
+    points = Math.min(points, nextLayerPoints);
+    displayPoints(points, extraPoints, success);
+
+    // count points got during current layer
+    layerPoints += success ? 1 : Infinity;
   }
 }
 
@@ -392,8 +428,8 @@ function getCurrentOrPreviousIndex(sortedArray, value, index = -1) {
 const pointsDiv = document.getElementById("points");
 const layerDiv = document.getElementById("layer");
 
-function displayPoints(points, success = true) {
-  pointsDiv.innerHTML = points;
+function displayPoints(points, extraPoints = 0, success = true) {
+  pointsDiv.innerHTML = points + extraPoints;
 
   if (!success) {
     pointsDiv.classList.add('error');
