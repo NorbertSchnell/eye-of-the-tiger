@@ -1,11 +1,11 @@
 const audioFiles = [
   'eot-guitar-loop.wav', // layer 0 (rhythm guitar riff)
-  'eot-piano-reverse.wav', // inverse piano sample
   'eot-drum-loop.wav', // 1st layer (drum loop)
   'eot-guitar-melody-loop.wav', // 2nd layer (melodic guitar )
   'eot-voice-loop.wav', // 3rd layer (voice)
   'eot-guitar-crunch-loop.wav', // 4th layer(heavy guitar)
   'eot-tail.wav', // final hit and vocals
+  'eot-piano-reverse.wav', // inverse piano sample
   'eot-hit-01.wav',
   'eot-hit-02.wav',
   'eot-hit-03.wav',
@@ -18,18 +18,21 @@ const audioFiles = [
   'eot-hit-10.wav',
 ];
 
-const hitMarkers = [
-  0.000000,
-  1.119250,
-  1.551396,
-  1.946792,
-  3.284271,
-  3.718583,
-  4.120479,
-  5.503333,
-  5.911708,
-  6.311438
+const loopMarkers = [
+  0, // 1st hit
+  1.1041328125, // 1st pattern
+  1.5181826171875,
+  1.932232421875,
+  3.3123984375, // 2nd pattern
+  3.7264482421875,
+  4.140498046875,
+  5.5206640625, // 3rd pattern
+  5.9347138671875,
+  6.348763671875,
+  8.8330625 // loop duration
 ];
+
+const hitBlocks = [];
 
 const layerLabels = [
   'Intro',
@@ -40,27 +43,56 @@ const layerLabels = [
   'End',
 ];
 
-const numLayers = 4;
-const hitsPerLoop = hitMarkers.length;
-const loopsPerLayer = 2;
-const pointsPerLayer = loopsPerLayer * hitsPerLoop;
-const allPoints = (numLayers + 1) * pointsPerLayer;
-const layerOffset = 2;
-const hitOffset = numLayers + 3;
+const numSoundsOtherThanHitsAndLayers = 3;
+const numLayers = (layerLabels.length - 1);
+const hitsPerLoop = (loopMarkers.length - 1);
+const layerMultipliers = [20, 10, 5, 3, 1];
+const minLoopsPerLayer = 1;
+const maxLoopsPerLayer = (layerMultipliers.length - 1);
+const pointsPerLayer = minLoopsPerLayer * hitsPerLoop;
+const guitarRiffIndex = 0;
+const voiceLayerIndex = 3;
+const reversePianoIndex = 6;
+const hitOffset = 4 + numSoundsOtherThanHitsAndLayers;
 const badDuration = 0.050;
+const fadeInDuration = 0.050;
 const fadeOutDuration = 0.050;
+const measuresPerLoop = 4;
+const beatsPerMeasure = 4;
+const beatsPerLoop = measuresPerLoop * beatsPerMeasure;
+const tempIncertainty = 0.025;
+const loopDuration = loopMarkers[hitsPerLoop];
+const beatDuration = loopDuration / beatsPerLoop;
+const sixteenthDuration = beatDuration / 4;
+const hitTolerance = beatDuration / 4;
+const hitReset = 0;
+const hitPlayed = 1;
+const hitGood = 2;
+const hitBad = 3;
 let startTime = null;
-let layerStartTime = null;
-let layerIndex = 0;
-let hitIndex = 0;
-let points = 0;
+let countInCount = 0;
+let countIn = null;
+let loopIndex = 0;
+let loopStartTime = null;
+let currentHitIndex = -1; // increments just before first hit in loop
+let layerIndex = 0; // intro
+let layerLabel = 'Count In';
+let hitInTime = false;
+let goodHits = 0;
+let badHits = 0;
+let perfectLoop = true;
+let successfulLoops = 0;
+let loopsInLayer = 0;
 let layerPoints = 0;
-let extraPoints = 0;
+let totalPoints = null;
+let nextLayerPending = false;
+
+const hitList = [];
+createHitBlocks();
+resetHitList();
 
 /********************************************************************
- * 
- *  start screen (overlay)
- * 
+ * start screen (overlay)
  */
 const startScreenDiv = document.getElementById("start-screen");
 const startScreenTextDiv = startScreenDiv.querySelector("p");
@@ -84,18 +116,21 @@ startScreenDiv.addEventListener("click", () => {
 function start() {
   hideOverlay();
 
+  // init time and duration
   startTime = audioContext.currentTime;
-  playSound(0, 0, 0, true);
-  playSound(1, 0, 0, false);
 
-  displayPoints(0);
-  displayLayer(0);
+  // console.log('hit tolerance: ', hitTolerance, 2 * hitTolerance);
+
+  playSound(guitarRiffIndex, 0, 0, true);
+  playSound(reversePianoIndex, 0, 0, false);
 
   listenToSpaceBar();
+  listenToDeviceMotion();
 
-  if (deviceMotionAllowed) {
-    listenToDeviceMotion();
-  }
+  const firstTimeJustBeforeHit = startTime + loopDuration - hitTolerance;
+  setTimeout(onTimeJustBeforeHit, 1000 * firstTimeJustBeforeHit);
+
+  onCountIn();
 }
 
 function showOverlay(text) {
@@ -123,9 +158,7 @@ function setOverlayError(text) {
 }
 
 /********************************************************************
- * 
- *  web audio
- * 
+ * web audio
  */
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioContext = new AudioContext();
@@ -166,10 +199,13 @@ function requestWebAudio() {
 }
 
 // play sound by audio buffer index
-function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
-  const time = audioContext.currentTime;
+function playSound(index, amplify = 0, duration = 0, loop = false, time = 0, offset = 0) {
   const amp = decibelToLinar(amplify);
   const buffer = audioBuffers[index];
+
+  if (time === 0) {
+    time = audioContext.currentTime;
+  }
 
   const gain = audioContext.createGain();
   gain.connect(audioContext.destination);
@@ -181,7 +217,14 @@ function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
   source.loop = loop;
   source.start(time, offset);
 
-  if (duration > 0 && duration < (buffer.duration - fadeOutDuration)) {
+  // apply fade in when sound starts with offset
+  if (offset > 0) {
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(amp, time + fadeInDuration);
+  }
+
+  // apply fade our when sound stops before end
+  if (!loop && duration > 0 && duration < (buffer.duration - fadeOutDuration)) {
     gain.gain.setValueAtTime(amp, time + duration);
     gain.gain.linearRampToValueAtTime(0, time + duration + fadeOutDuration);
     source.stop(time + duration + fadeOutDuration);
@@ -192,8 +235,10 @@ function playSound(index, amplify = 0, duration = 0, loop = false, offset = 0) {
   }
 }
 
-function stopAllLoops() {
-  const time = audioContext.currentTime;
+function stopAllLoops(time = 0) {
+  if (time === 0) {
+    time = audioContext.currentTime;
+  }
 
   for (let loop of loops) {
     const source = loop.source;
@@ -204,24 +249,22 @@ function stopAllLoops() {
   }
 }
 
-
-
 function decibelToLinar(val) {
   return Math.exp(0.11512925464970229 * val); // pow(10, val / 20)
 }
 
 /********************************************************************
- *  space bar
+ * space bar
  */
 function listenToSpaceBar() {
   document.addEventListener('keyup', event => {
     if (event.code === 'Space') {
-      playHit();
+      onHit();
     }
   })
 }
 /********************************************************************
- *  device motion
+ * device motion
  */
 let dataStreamTimeout = null;
 let dataStreamResolve = null;
@@ -267,7 +310,9 @@ function requestDeviceMotion() {
 }
 
 function listenToDeviceMotion() {
-  window.addEventListener("devicemotion", onDeviceMotion);
+  if (deviceMotionAllowed) {
+    window.addEventListener("devicemotion", onDeviceMotion);
+  }
 }
 
 const rotationRateThreshold = 200;
@@ -303,8 +348,8 @@ function onDeviceMotion(e) {
     const peakRot = currentFilteredRot;
 
     const timeSinceLastHit = peakTime - lastHitTime;
-    if (peakRot >= rotationRateThreshold && timeSinceLastHit > 0.25) {
-      playHit();
+    if (peakRot >= rotationRateThreshold && timeSinceLastHit > 2 * hitTolerance) {
+      onHit();
       lastHitTime = peakTime;
     }
   }
@@ -314,137 +359,344 @@ function onDeviceMotion(e) {
 }
 
 /********************************************************************
- *  hits, points and layers
+ * beats, hits and layers
  */
-function playHit() {
-  if (!reachedEnd) {
+const flashDiv = document.getElementById("flash");
+
+function onTimeJustBeforeHit() {
+  hitInTime = true;
+
+  // console.log(`_____________ (${layerIndex}, ${successfulLoops}, ${currentHitIndex})`);
+
+  // advance to next hit
+  currentHitIndex = (currentHitIndex + 1) % hitsPerLoop;
+
+  if (currentHitIndex === 0) {
+    // next loop starting
+    loopIndex++;
+    loopStartTime = startTime + loopIndex * loopDuration;
+    resetHitList();
+
+    // init loop hit evaluation
+    goodHits = 0;
+    badHits = 0;
+    perfectLoop = true;
+
+    if (nextLayerPending) {
+      // increment layer index
+      layerIndex++;
+
+      // increment total points
+      const multiplier = (successfulLoops === 0) ? 1 : layerMultipliers[(loopsInLayer - 1)];
+      totalPoints += multiplier * layerPoints;
+
+      // init layer state
+      successfulLoops = 0;
+      loopsInLayer = 0;
+      layerPoints = 0;
+      nextLayerPending = false;
+    }
+  }
+
+  const time = audioContext.currentTime;
+  const currentHitMarker = loopMarkers[currentHitIndex];
+  const nextHitMarker = loopMarkers[currentHitIndex + 1];
+
+  const currentHitTime = loopStartTime + currentHitMarker;
+  setTimeout(onHitTime, 1000 * (currentHitTime - time));
+
+  if (nextHitMarker - currentHitMarker > 2 * hitTolerance) {
+    const nextTimeJustAfterHit = loopStartTime + currentHitMarker + hitTolerance;
+    setTimeout(onTimeJustAfterHit, 1000 * (nextTimeJustAfterHit - time));
+    //setTimeout(onTimeJustAfterHit, 1000 * 2 * hitTolerance);
+  }
+
+  if (layerIndex < numLayers) {
+    const nextTimeJustBeforeHit = loopStartTime + nextHitMarker - hitTolerance;
+    setTimeout(onTimeJustBeforeHit, 1000 * (nextTimeJustBeforeHit - time));
+  }
+
+  updateDisplay();
+}
+
+function onHitTime() {
+  if (currentHitIndex === 0) {
+    if (totalPoints === null) {
+      totalPoints = 0;
+      countIn = null;
+    }
+
+    // update layer label
+    layerLabel = layerLabels[layerIndex];
+
+    if (layerIndex === numLayers) {
+      // this is the end
+      reachedEnd = true;
+    }
+  }
+
+  flashDisplay(currentHitIndex === (hitsPerLoop - 1));
+
+  if (!reachedEnd && hitList[currentHitIndex] < hitPlayed) {
+    hitList[currentHitIndex] = hitPlayed;
+  }
+
+  updateDisplay();
+}
+
+function onTimeJustAfterHit() {
+  hitInTime = false;
+
+  perfectLoop = (goodHits === (currentHitIndex + 1)) && (badHits === 0);
+
+  if (currentHitIndex === hitsPerLoop - 1) {
+    // loop successfully completed
+    if (perfectLoop) {
+      successfulLoops++;
+
+      // init loop hit evaluation
+      goodHits = 0;
+      badHits = 0;
+    }
+
+    loopsInLayer++;
+    perfectLoop = true;
+
+    // advance to next layer
+    if (successfulLoops === minLoopsPerLayer || loopsInLayer === maxLoopsPerLayer) {
+      // set next layer pending
+      nextLayerPending = true;
+
+      // launch next layer loop
+      const nextLayerIndex = layerIndex + 1;
+      if (nextLayerIndex === voiceLayerIndex) {
+        const time = audioContext.currentTime;
+        const loopTime = (time - startTime) % loopDuration;
+        playSound(voiceLayerIndex, 0, 0, true, 0, loopTime);
+      } else {
+        const nextLoopStartTime = loopStartTime + loopDuration;
+
+        if (nextLayerIndex < numLayers) {
+          // start next layer
+          playSound(nextLayerIndex, 0, 0, true, nextLoopStartTime);
+        } else if (nextLayerIndex === numLayers) {
+          // start end (voice tail)
+          playSound(numLayers, 6, 0, false, nextLoopStartTime);
+          stopAllLoops(nextLoopStartTime);
+        }
+      }
+    }
+  }
+
+  updateDisplay();
+
+  // console.log(`^^^^^^^^^^^^^^ (${goodHits}, ${badHits})`);
+}
+
+function onHit() {
+  if (loopIndex > 0 && layerIndex < numLayers) {
+    if (hitInTime) {
+      // increase good hits
+      goodHits++;
+
+      // increase layer points
+      layerPoints++;
+
+      // play good hit
+      playSound(currentHitIndex + hitOffset, 6);
+
+      // just one hit in time is good
+      hitInTime = false;
+
+      // mark good hit in "hit list"
+      if (hitList[currentHitIndex] < hitGood) {
+        hitList[currentHitIndex] = hitGood;
+      }
+    } else if (currentHitIndex !== (hitsPerLoop - 1)) {
+      // increase bad hits
+      badHits++;
+
+      // decrease layer points
+      layerPoints = Math.max(0, layerPoints - 1);
+
+      // sure not a perfect loop
+      perfectLoop = false;
+
+      // play bad hit
+      playSound(currentHitIndex + hitOffset, 6, badDuration);
+
+      // mark bad hit in "hit list"
+      hitList[currentHitIndex] = hitBad;
+    }
+  }
+
+  updateDisplay();
+}
+
+function resetHitList() {
+  for (let i = 0; i < hitsPerLoop; i++) {
+    hitList[i] = hitReset;
+  }
+}
+
+function displayHitList() {
+  for (let i = 0; i < hitsPerLoop; i++) {
+    const hit = hitList[i];
+    const block = hitBlocks[i];
+
+    block.className = 'hit-block';
+
+    switch (hit) {
+      case hitReset:
+        block.classList.add('reset');
+        break;
+      case hitPlayed:
+        block.classList.add('played');
+        break;
+      case hitGood:
+        block.classList.add('good');
+        break;
+      case hitBad:
+        block.classList.add('bad');
+        break;
+    }
+  }
+}
+
+function printHitList() {
+  let str = '';
+
+  for (let i = 0; i <= currentHitIndex; i++) {
+    const hit = hitList[i];
+
+    switch (hit) {
+      case hitReset:
+        str += '.';
+        break;
+      case hitPlayed:
+        str += '-';
+        break;
+      case hitGood:
+        str += '*';
+        break;
+      case hitBad:
+        str += 'x';
+        break;
+    }
+  }
+
+  console.log('hit list: ' + str);
+}
+
+function updateDisplay() {
+  requestAnimationFrame(onAnimationFrame);
+}
+
+function onAnimationFrame() {
+  displayCountIn();
+  displayHitList();
+  displayPoints();
+  displayLayer();
+  // printHitList();
+}
+
+function createHitBlocks() {
+  const blockContainer = document.getElementById('block-container');
+
+  for (let i = 0; i < hitsPerLoop; i++) {
+    const hitTime = loopMarkers[i];
+    const hitDuration = loopMarkers[i + 1] - loopMarkers[i];
+
+    const block = document.createElement('div');
+    block.classList.add('hit-block');
+    block.style.bottom = `${100 * hitTime / loopDuration}%`;
+    block.style.height = `${100 * hitDuration / loopDuration}%`;
+    blockContainer.append(block);
+    hitBlocks.push(block);
+
+    console.log(`hit ${i + 1}: ${hitTime} (${hitDuration})`);
+  }
+}
+
+const totalPointDiv = document.getElementById("total-points");
+const layerPointDiv = document.getElementById("layer-points");
+
+function displayPoints() {
+  if (totalPoints !== null) {
+    totalPointDiv.innerHTML = totalPoints;
+  }
+
+  if (loopIndex > 0 && !reachedEnd) {
+    const multiplierIndex = loopsInLayer + !perfectLoop - nextLayerPending;
+    const layerPointMultiplier = layerMultipliers[multiplierIndex];
+    layerPointDiv.innerHTML = `${layerPoints} &times; ${layerPointMultiplier}`;
+  } else {
+    layerPointDiv.innerHTML = '';
+  }
+
+  if (nextLayerPending) {
+    layerPointDiv.classList.add('blinking');
+  } else {
+    layerPointDiv.classList.remove('blinking');
+  }
+}
+
+const layerLabelDiv = document.getElementById("layer-label");
+
+function displayLayer() {
+  layerLabelDiv.innerHTML = layerLabel;
+
+  if (nextLayerPending) {
+    layerLabelDiv.classList.add('blinking');
+  } else {
+    layerLabelDiv.classList.remove('blinking');
+  }
+
+  // console.log(`layer ${layerIndex}: ${layerLabel}`);
+}
+
+function flashDisplay(long = false) {
+  flashDiv.classList.remove('short-flashing');
+  flashDiv.classList.remove('long-flashing');
+  flashDiv.offsetWidth;
+
+  if (long) {
+    flashDiv.classList.add('long-flashing');
+  } else {
+    flashDiv.classList.add('short-flashing');
+  }
+}
+
+/********************************************************************
+ * count in
+ */
+function onCountIn() {
+
+  if (countInCount < 12) {
+    if (countInCount % 2 === 0) {
+      const count = Math.floor(countInCount / 2) % 4
+      countIn = count + 1;
+      flashDisplay(true);
+    }
+  } else {
+    const count = countInCount % 4;
+    countIn = count + 1;
+    flashDisplay();
+  }
+
+  countInCount++;
+
+  if (countInCount <= 16) {
     const time = audioContext.currentTime;
-    const loopDuration = audioBuffers[0].duration;
-    const loopTime = (time - startTime) % loopDuration;
-    const tolerance = loopDuration / 64;
-
-    // get hit corresponding to current loop time with tolerance
-    const tolerantLoopTime = (loopTime + tolerance) % loopDuration;
-    hitIndex = getCurrentOrPreviousIndex(hitMarkers, tolerantLoopTime, hitIndex);
-
-    // calculate difference time to current or next hit and compare with tolerance
-    const hitTime = hitMarkers[hitIndex];
-    const diff = Math.abs(hitTime - (tolerantLoopTime - tolerance));
-    const success = (diff < tolerance);
-
-    // play hit (shortend when too far from current or next hitTime)
-    const duration = success ? 0 : badDuration;
-    playSound(hitIndex + hitOffset, 6, duration);
-
-    // calculate points required for next layer
-    let nextLayerPoints = pointsPerLayer * (layerIndex + 1);
-    let nextLayer = false;
-
-    if (success) {
-      // increase points
-      points++;
-
-      if (hitIndex === 0 && layerStartTime === null) {
-        layerStartTime = time;
-      }
-
-      // launch layers loops (every 2 patterns = 20 hits)
-      if (layerIndex < numLayers && hitIndex === 0 && points > nextLayerPoints) {
-        // launch new layer on 1st hit (when enough points)
-        if (layerIndex !== 2) {
-          playSound(layerOffset + layerIndex, 0, 0, true, loopTime);
-        }
-        nextLayer = true;
-      } else if (layerIndex == 2 && hitIndex === 9 && points > nextLayerPoints - 1) {
-        // exception: voice loop (3rd layer) starts on last bar (10th hit)
-        playSound(layerOffset + 2, 0, 0, true, loopTime);
-      } else if (layerIndex == numLayers && hitIndex === 0 && points > allPoints) {
-        // play tail (final sample)
-        playSound(layerOffset + numLayers, 0, 0, false, loopTime);
-        stopAllLoops();
-        nextLayer = true;
-        reachedEnd = true;
-      }
-
-      // enter next layer
-      if (nextLayer) {
-        const layerDuration = time - layerStartTime;
-        const expectedLayerDuration = loopsPerLayer * loopDuration;
-        const layerDiffDuration = Math.abs(layerDuration - expectedLayerDuration);
-        const maxDiffDuration = (loopDuration - hitMarkers[9] + 2 * tolerance);
-
-        // increase extra points for perfect layer
-        if (layerPoints === pointsPerLayer && layerDiffDuration < maxDiffDuration) {
-          extraPoints += 100;
-        }
-
-        layerIndex++; // increase layer
-        layerPoints = 0; // reset layer points
-        layerStartTime = time; // reset start time
-      }
-
-      // display layer (blinking when next layer is pending)
-      nextLayerPoints = pointsPerLayer * (layerIndex + 1);
-      const nextLayerPending = (points >= nextLayerPoints);
-      displayLayer(layerIndex, nextLayerPending);
-    } else {
-      points--;
-    }
-
-    points = Math.min(points, nextLayerPoints);
-    displayPoints(points, extraPoints, success);
-
-    // count points got during current layer
-    layerPoints += success ? 1 : Infinity;
-  }
-}
-
-function getCurrentOrPreviousIndex(sortedArray, value, index = -1) {
-  var size = sortedArray.length;
-
-  if (size > 0) {
-    var firstVal = sortedArray[0];
-    var lastVal = sortedArray[size - 1];
-
-    if (value < firstVal)
-      index = -1;
-    else if (value >= lastVal)
-      index = size - 1;
-    else {
-      if (index < 0 || index >= size)
-        index = Math.floor((size - 1) * (value - firstVal) / (lastVal - firstVal));
-
-      while (sortedArray[index] > value)
-        index--;
-
-      while (sortedArray[index + 1] <= value)
-        index++;
-    }
+    const nextCountInTime = startTime + countInCount * beatDuration;
+    setTimeout(onCountIn, 1000 * (nextCountInTime - time));
   }
 
-  return index;
+  updateDisplay();
 }
 
-const pointsDiv = document.getElementById("points");
-const layerDiv = document.getElementById("layer");
-
-function displayPoints(points, extraPoints = 0, success = true) {
-  pointsDiv.innerHTML = points + extraPoints;
-
-  if (!success) {
-    pointsDiv.classList.add('error');
-  } else {
-    pointsDiv.classList.remove('error');
-  }
-}
-
-function displayLayer(layerIndex, pending = false) {
-  const label = layerLabels[layerIndex];
-  layerDiv.innerHTML = label;
-
-  if (pending) {
-    layerDiv.classList.add('pending');
-  } else {
-    layerDiv.classList.remove('pending');
+function displayCountIn() {
+  if (countIn !== null) {
+    totalPointDiv.innerHTML = countIn;
   }
 }
