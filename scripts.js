@@ -629,7 +629,7 @@ function displayPoints() {
   if (loopIndex > 0 && !reachedEnd) {
     const multiplierIndex = loopsInLayer + !perfectLoop - nextLayerPending;
     const layerPointMultiplier = layerMultipliers[multiplierIndex];
-    layerPointDiv.innerHTML = `${layerPoints} &times; ${layerPointMultiplier}`;
+    layerPointDiv.innerHTML = `${layerPointMultiplier} &times; ${layerPoints}`;
   } else {
     layerPointDiv.innerHTML = '';
   }
