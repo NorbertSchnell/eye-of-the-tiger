@@ -126,7 +126,8 @@ function start() {
   listenToDeviceMotion();
 
   const firstTimeJustBeforeHit = startTime + loopDuration - hitTolerance;
-  setTimeout(onTimeJustBeforeHit, 1000 * firstTimeJustBeforeHit);
+  const time = audioContext.currentTime;
+  setTimeout(onTimeJustBeforeHit, 1000 * (firstTimeJustBeforeHit - time));
 
   onCountIn();
 }
@@ -176,7 +177,7 @@ function loadAudioFiles() {
           audioBuffers[i] = decodedAudio;
           numBuffersReady++;
           if (numBuffersReady === audioFiles.length) {
-            setTimeout(resolve, 100);
+            resolve();
           }
         });
     }
@@ -186,7 +187,7 @@ function loadAudioFiles() {
 // get promise for web audio check and start
 function requestWebAudio() {
   return new Promise((resolve, reject) => {
-    if (AudioContext) {
+    if (audioContext) {
       audioContext.resume()
         .then(() => resolve())
         .catch(() => reject());
