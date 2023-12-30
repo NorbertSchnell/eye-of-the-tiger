@@ -119,8 +119,6 @@ function start() {
   // init time and duration
   startTime = audioContext.currentTime;
 
-  // console.log('hit tolerance: ', hitTolerance, 2 * hitTolerance);
-
   playSound(guitarRiffIndex, 0, 0, true);
   playSound(reversePianoIndex, 0, 0, false);
 
@@ -166,6 +164,7 @@ const loops = new Set();
 const audioBuffers = [];
 let numBuffersReady = 0;
 
+// get promise that resolves when all audio files are loaded
 function loadAudioFiles() {
   return new Promise((resolve, reject) => {
     // load audio files into audio buffers
@@ -177,7 +176,7 @@ function loadAudioFiles() {
           audioBuffers[i] = decodedAudio;
           numBuffersReady++;
           if (numBuffersReady === audioFiles.length) {
-            resolve();
+            setTimeout(resolve, 100);
           }
         });
     }
@@ -235,11 +234,8 @@ function playSound(index, amplify = 0, duration = 0, loop = false, time = 0, off
   }
 }
 
-function stopAllLoops(time = 0) {
-  if (time === 0) {
-    time = audioContext.currentTime;
-  }
-
+// stop all running loops
+function stopAllLoops(time = audioContext.currentTime) {
   for (let loop of loops) {
     const source = loop.source;
     const gain = loop.gain;
@@ -249,8 +245,8 @@ function stopAllLoops(time = 0) {
   }
 }
 
-function decibelToLinar(val) {
-  return Math.exp(0.11512925464970229 * val); // pow(10, val / 20)
+function decibelToLinar(value) {
+  return Math.exp(0.11512925464970229 * value); // pow(10, value / 20)
 }
 
 /********************************************************************
@@ -263,6 +259,7 @@ function listenToSpaceBar() {
     }
   })
 }
+
 /********************************************************************
  * device motion
  */
@@ -359,14 +356,122 @@ function onDeviceMotion(e) {
 }
 
 /********************************************************************
- * beats, hits and layers
+ * display
  */
+const layerPointDiv = document.getElementById("layer-points");
+const totalPointDiv = document.getElementById("total-points");
+const layerLabelDiv = document.getElementById("layer-label");
 const flashDiv = document.getElementById("flash");
 
-function onTimeJustBeforeHit() {
-  hitInTime = true;
+function displayHitList() {
+  for (let i = 0; i < hitsPerLoop; i++) {
+    const hit = hitList[i];
+    const block = hitBlocks[i];
 
-  // console.log(`_____________ (${layerIndex}, ${successfulLoops}, ${currentHitIndex})`);
+    block.className = 'hit-block';
+
+    switch (hit) {
+      case hitReset:
+        block.classList.add('reset');
+        break;
+      case hitPlayed:
+        block.classList.add('played');
+        break;
+      case hitGood:
+        block.classList.add('good');
+        break;
+      case hitBad:
+        block.classList.add('bad');
+        break;
+    }
+  }
+}
+
+function createHitBlocks() {
+  const blockContainer = document.getElementById('block-container');
+
+  for (let i = 0; i < hitsPerLoop; i++) {
+    const hitTime = loopMarkers[i];
+    const hitDuration = loopMarkers[i + 1] - loopMarkers[i];
+
+    const block = document.createElement('div');
+    block.classList.add('hit-block');
+    block.style.bottom = `${100 * hitTime / loopDuration}%`;
+    block.style.height = `${100 * hitDuration / loopDuration}%`;
+    blockContainer.append(block);
+    hitBlocks.push(block);
+
+    // console.log(`hit ${i + 1}: ${hitTime} (${hitDuration})`);
+  }
+}
+
+function resetHitList() {
+  for (let i = 0; i < hitsPerLoop; i++) {
+    hitList[i] = hitReset;
+  }
+}
+
+function displayPoints() {
+  if (totalPoints !== null) {
+    totalPointDiv.innerHTML = totalPoints;
+  }
+
+  if (loopIndex > 0 && !reachedEnd) {
+    const multiplierIndex = loopsInLayer + !perfectLoop - nextLayerPending;
+    const layerPointMultiplier = layerMultipliers[multiplierIndex];
+    layerPointDiv.innerHTML = `${layerPointMultiplier} &times; ${layerPoints}`;
+  } else {
+    layerPointDiv.innerHTML = '';
+  }
+
+  if (nextLayerPending) {
+    layerPointDiv.classList.add('blinking');
+  } else {
+    layerPointDiv.classList.remove('blinking');
+  }
+}
+
+function displayLayerLabel() {
+  layerLabelDiv.innerHTML = layerLabel;
+
+  if (nextLayerPending) {
+    layerLabelDiv.classList.add('blinking');
+  } else {
+    layerLabelDiv.classList.remove('blinking');
+  }
+
+  // console.log(`layer ${layerIndex}: ${layerLabel}`);
+}
+
+function updateDisplay() {
+  requestAnimationFrame(onAnimationFrame);
+}
+
+function onAnimationFrame() {
+  displayCountIn();
+  displayHitList();
+  displayPoints();
+  displayLayerLabel();
+}
+
+function flashDisplay(long = false) {
+  flashDiv.classList.remove('short-flashing');
+  flashDiv.classList.remove('long-flashing');
+  flashDiv.offsetWidth;
+
+  if (long) {
+    flashDiv.classList.add('long-flashing');
+  } else {
+    flashDiv.classList.add('short-flashing');
+  }
+}
+
+/********************************************************************
+ * device motion
+ */
+function onTimeJustBeforeHit() {
+  // open hit
+  hitInTime = true;
 
   // advance to next hit
   currentHitIndex = (currentHitIndex + 1) % hitsPerLoop;
@@ -445,8 +550,10 @@ function onHitTime() {
 }
 
 function onTimeJustAfterHit() {
+  // close hit
   hitInTime = false;
 
+  // check whether all hits are done good
   perfectLoop = (goodHits === (currentHitIndex + 1)) && (badHits === 0);
 
   if (currentHitIndex === hitsPerLoop - 1) {
@@ -459,6 +566,7 @@ function onTimeJustAfterHit() {
       badHits = 0;
     }
 
+    // increment loop
     loopsInLayer++;
     perfectLoop = true;
 
@@ -489,8 +597,6 @@ function onTimeJustAfterHit() {
   }
 
   updateDisplay();
-
-  // console.log(`^^^^^^^^^^^^^^ (${goodHits}, ${badHits})`);
 }
 
 function onHit() {
@@ -533,152 +639,20 @@ function onHit() {
   updateDisplay();
 }
 
-function resetHitList() {
-  for (let i = 0; i < hitsPerLoop; i++) {
-    hitList[i] = hitReset;
-  }
-}
-
-function displayHitList() {
-  for (let i = 0; i < hitsPerLoop; i++) {
-    const hit = hitList[i];
-    const block = hitBlocks[i];
-
-    block.className = 'hit-block';
-
-    switch (hit) {
-      case hitReset:
-        block.classList.add('reset');
-        break;
-      case hitPlayed:
-        block.classList.add('played');
-        break;
-      case hitGood:
-        block.classList.add('good');
-        break;
-      case hitBad:
-        block.classList.add('bad');
-        break;
-    }
-  }
-}
-
-function printHitList() {
-  let str = '';
-
-  for (let i = 0; i <= currentHitIndex; i++) {
-    const hit = hitList[i];
-
-    switch (hit) {
-      case hitReset:
-        str += '.';
-        break;
-      case hitPlayed:
-        str += '-';
-        break;
-      case hitGood:
-        str += '*';
-        break;
-      case hitBad:
-        str += 'x';
-        break;
-    }
-  }
-
-  console.log('hit list: ' + str);
-}
-
-function updateDisplay() {
-  requestAnimationFrame(onAnimationFrame);
-}
-
-function onAnimationFrame() {
-  displayCountIn();
-  displayHitList();
-  displayPoints();
-  displayLayer();
-  // printHitList();
-}
-
-function createHitBlocks() {
-  const blockContainer = document.getElementById('block-container');
-
-  for (let i = 0; i < hitsPerLoop; i++) {
-    const hitTime = loopMarkers[i];
-    const hitDuration = loopMarkers[i + 1] - loopMarkers[i];
-
-    const block = document.createElement('div');
-    block.classList.add('hit-block');
-    block.style.bottom = `${100 * hitTime / loopDuration}%`;
-    block.style.height = `${100 * hitDuration / loopDuration}%`;
-    blockContainer.append(block);
-    hitBlocks.push(block);
-
-    console.log(`hit ${i + 1}: ${hitTime} (${hitDuration})`);
-  }
-}
-
-const totalPointDiv = document.getElementById("total-points");
-const layerPointDiv = document.getElementById("layer-points");
-
-function displayPoints() {
-  if (totalPoints !== null) {
-    totalPointDiv.innerHTML = totalPoints;
-  }
-
-  if (loopIndex > 0 && !reachedEnd) {
-    const multiplierIndex = loopsInLayer + !perfectLoop - nextLayerPending;
-    const layerPointMultiplier = layerMultipliers[multiplierIndex];
-    layerPointDiv.innerHTML = `${layerPointMultiplier} &times; ${layerPoints}`;
-  } else {
-    layerPointDiv.innerHTML = '';
-  }
-
-  if (nextLayerPending) {
-    layerPointDiv.classList.add('blinking');
-  } else {
-    layerPointDiv.classList.remove('blinking');
-  }
-}
-
-const layerLabelDiv = document.getElementById("layer-label");
-
-function displayLayer() {
-  layerLabelDiv.innerHTML = layerLabel;
-
-  if (nextLayerPending) {
-    layerLabelDiv.classList.add('blinking');
-  } else {
-    layerLabelDiv.classList.remove('blinking');
-  }
-
-  // console.log(`layer ${layerIndex}: ${layerLabel}`);
-}
-
-function flashDisplay(long = false) {
-  flashDiv.classList.remove('short-flashing');
-  flashDiv.classList.remove('long-flashing');
-  flashDiv.offsetWidth;
-
-  if (long) {
-    flashDiv.classList.add('long-flashing');
-  } else {
-    flashDiv.classList.add('short-flashing');
-  }
-}
-
 /********************************************************************
  * count in
  */
 function onCountIn() {
 
   if (countInCount < 12) {
+    // 1 - 2 - 3 - 4 - 1 - 2
     if (countInCount % 2 === 0) {
       const count = Math.floor(countInCount / 2) % 4
       countIn = count + 1;
       flashDisplay(true);
     }
   } else {
+    // 1 2 3 4
     const count = countInCount % 4;
     countIn = count + 1;
     flashDisplay();
