@@ -69,6 +69,7 @@ const hitReset = 0;
 const hitPlayed = 1;
 const hitGood = 2;
 const hitBad = 3;
+let initiated = false;
 let startTime = null;
 let countInCount = 0;
 let countIn = null;
@@ -98,20 +99,27 @@ const startScreenDiv = document.getElementById("start-screen");
 const startScreenTextDiv = startScreenDiv.querySelector("p");
 
 // open start screen
-showOverlay("touch screen to start");
+showOverlay("touch, click or press to start");
 const buffersReady = loadAudioFiles();
 
 // start after touch
-startScreenDiv.addEventListener("click", () => {
-  setOverlayText("checking for motion sensors and loading buffers...");
+startScreenDiv.addEventListener("click", initiate);
+listenToSpaceBar();
 
-  const audioPromise = requestWebAudio();
-  const deviceMotionPromise = requestDeviceMotion();
+function initiate() {
+  if (!initiated) {
+    initiated = true;
 
-  Promise.all([audioPromise, deviceMotionPromise, buffersReady])
-    .then(() => start()) // start application
-    .catch((error) => setOverlayError(error)); // ... or display error
-});
+    setOverlayText("checking for sensors and loading audio...");
+
+    const audioPromise = requestWebAudio();
+    const deviceMotionPromise = requestDeviceMotion();
+
+    Promise.all([audioPromise, deviceMotionPromise, buffersReady])
+      .then(() => start()) // start application
+      .catch((error) => setOverlayError(error)); // ... or display error
+  }
+}
 
 function start() {
   hideOverlay();
@@ -122,7 +130,6 @@ function start() {
   playSound(guitarRiffIndex, 0, 0, true);
   playSound(reversePianoIndex, 0, 0, false);
 
-  listenToSpaceBar();
   listenToDeviceMotion();
 
   const firstTimeJustBeforeHit = startTime + loopDuration - hitTolerance;
@@ -255,8 +262,12 @@ function decibelToLinar(value) {
  */
 function listenToSpaceBar() {
   document.addEventListener('keyup', event => {
-    if (event.code === 'Space') {
-      onHit();
+    if (event.code === 'Space') {      
+      if (!initiated) {
+        initiate();
+      } else {
+        onHit();
+      }
     }
   })
 }
